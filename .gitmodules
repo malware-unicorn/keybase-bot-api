@@ -1,3 +1,3 @@
 [submodule "github.com/keybase/client"]
-	path = vendor/github.com/keybase/client
+	path = src/github.com/keybase/client
 	url = https://github.com/keybase/client.git
