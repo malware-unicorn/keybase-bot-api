@@ -1,3 +1,6 @@
 [submodule "github.com/keybase/client"]
 	path = src/github.com/keybase/client
 	url = https://github.com/keybase/client.git
+[submodule "github.com/keybase/cli"]
+	path = src/github.com/keybase/cli
+	url = https://github.com/keybase/cli.git
