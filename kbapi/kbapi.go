@@ -4,6 +4,7 @@ import(
     "github.com/keybase/client/go/externals"
     "github.com/keybase/client/go/libkb"
     "github.com/keybase/client/go/client"
+    "github.com/keybase/client/go/chat/utils"
     "context"
     "fmt"
     "encoding/json"
@@ -50,21 +51,30 @@ func (e ErrInvalidOptions) Error() string {
   return fmt.Sprintf("invalid %s v%d options: %s", e.method, e.version, e.err)
 }
 
+type ErrInvalidMethod struct {
+	name    string
+	version int
+}
+
+func (e ErrInvalidMethod) Error() string {
+	return fmt.Sprintf("invalid v%d method %q", e.version, e.name)
+}
+
 type Kbapi struct {
-    g *libkb.GlobalContext
+  g *libkb.GlobalContext
 }
 
 func NewKbApi() *Kbapi {
   g := externals.NewGlobalContextInit()
   kb := Kbapi{ g: g }
-        kb.g.Env.Test.UseProductionRunMode = true
-        usage := libkb.Usage{
-                API:       true,
-                KbKeyring: true,
-                Config:    true,
-                //Socket:    true,
-        }
-        kb.g.ConfigureUsage(usage);
+  kb.g.Env.Test.UseProductionRunMode = true
+  usage := libkb.Usage{
+          API:       true,
+          KbKeyring: true,
+          Config:    true,
+          //Socket:    true,
+  }
+  kb.g.ConfigureUsage(usage);
   return &kb
 }
 
@@ -107,7 +117,6 @@ func (kb*Kbapi) SendApi(apiInput string) (b []byte, err error) {
       enc := json.NewEncoder(b)
       enc.Encode(reply)
       return b.Bytes(), nil
-
     case methodRead:
       if len(call.Params.Options) == 0 {
           return nil, ErrInvalidOptions{version: 1, method: methodRead, err: errors.New("empty options")}
@@ -123,7 +132,6 @@ func (kb*Kbapi) SendApi(apiInput string) (b []byte, err error) {
       enc := json.NewEncoder(b)
       enc.Encode(reply)
       return b.Bytes(), nil
-
     case methodGet:
       if len(call.Params.Options) == 0 {
         return nil, ErrInvalidOptions{version: 1, method: methodRead, err: errors.New("empty options")}
@@ -139,32 +147,171 @@ func (kb*Kbapi) SendApi(apiInput string) (b []byte, err error) {
       enc := json.NewEncoder(b)
       enc.Encode(reply)
       return b.Bytes(), nil
-
-      return nil, nil
     case methodSend:
-      return nil, nil
+      if len(call.Params.Options) == 0 {
+        return nil, ErrInvalidOptions{version: 1, method: methodSend, err: errors.New("empty options")}
+      }
+      var opts sendOptionsV1
+      if err := json.Unmarshal(call.Params.Options, &opts); err != nil {
+        return nil, err
+      }
+      // opts are valid for send v1
+      chatUI := NewChatAPIUI(AllowStellarPayments(opts.ConfirmLumenSend))
+      reply := SendV1(kb.g, context.Background(), opts, chatUI)
+      reply.Jsonrpc = call.Jsonrpc
+      reply.ID = call.ID
+      b := new(bytes.Buffer)
+      enc := json.NewEncoder(b)
+      enc.Encode(reply)
+      return b.Bytes(), nil
     case methodEdit:
-      return nil, nil
+      if len(call.Params.Options) == 0 {
+        return nil, ErrInvalidOptions{version: 1, method: methodEdit, err: errors.New("empty options")}
+      }
+      var opts editOptionsV1
+      if err := json.Unmarshal(call.Params.Options, &opts); err != nil {
+        return nil, err
+      }
+      reply := EditV1(kb.g, context.Background(), opts)
+      reply.Jsonrpc = call.Jsonrpc
+      reply.ID = call.ID
+      b := new(bytes.Buffer)
+      enc := json.NewEncoder(b)
+      enc.Encode(reply)
+      return b.Bytes(), nil
     case methodReaction:
-      return nil, nil
+      if len(call.Params.Options) == 0 {
+        return nil, ErrInvalidOptions{version: 1, method: methodReaction, err: errors.New("empty options")}
+      }
+      var opts reactionOptionsV1
+      if err := json.Unmarshal(call.Params.Options, &opts); err != nil {
+        return nil, err
+      }
+      reply := ReactionV1(kb.g, context.Background(), opts)
+      reply.Jsonrpc = call.Jsonrpc
+      reply.ID = call.ID
+      b := new(bytes.Buffer)
+      enc := json.NewEncoder(b)
+      enc.Encode(reply)
+      return b.Bytes(), nil
     case methodAttach:
-      return nil, nil
+      if len(call.Params.Options) == 0 {
+        return nil, ErrInvalidOptions{version: 1, method: methodAttach, err: errors.New("empty options")}
+      }
+      var opts attachOptionsV1
+      if err := json.Unmarshal(call.Params.Options, &opts); err != nil {
+        return nil, err
+      }
+      chatUI := NewChatAPIUI()
+      reply := AttachV1(kb.g, context.Background(), opts, chatUI, utils.DummyChatNotifications{})
+      reply.Jsonrpc = call.Jsonrpc
+      reply.ID = call.ID
+      b := new(bytes.Buffer)
+      enc := json.NewEncoder(b)
+      enc.Encode(reply)
+      return b.Bytes(), nil
     case methodListConvsOnName:
-      return nil, nil
+      if len(call.Params.Options) == 0 {
+        return nil, ErrInvalidOptions{version: 1, method: methodListConvsOnName, err: errors.New("empty options")}
+      }
+      var opts listConvsOnNameOptionsV1
+      if err := json.Unmarshal(call.Params.Options, &opts); err != nil {
+        return nil, err
+      }
+      reply := ListConvsOnNameV1(kb.g, context.Background(), opts)
+      reply.Jsonrpc = call.Jsonrpc
+      reply.ID = call.ID
+      b := new(bytes.Buffer)
+      enc := json.NewEncoder(b)
+      enc.Encode(reply)
+      return b.Bytes(), nil
     case methodJoin:
-      return nil, nil
+      if len(call.Params.Options) == 0 {
+        return nil, ErrInvalidOptions{version: 1, method: methodJoin, err: errors.New("empty options")}
+      }
+      var opts joinOptionsV1
+      if err := json.Unmarshal(call.Params.Options, &opts); err != nil {
+        return nil, err
+      }
+      reply := JoinV1(kb.g, context.Background(), opts)
+      reply.Jsonrpc = call.Jsonrpc
+      reply.ID = call.ID
+      b := new(bytes.Buffer)
+      enc := json.NewEncoder(b)
+      enc.Encode(reply)
+      return b.Bytes(), nil
     case methodLeave:
-      return nil, nil
+      if len(call.Params.Options) == 0 {
+        return nil, ErrInvalidOptions{version: 1, method: methodLeave, err: errors.New("empty options")}
+      }
+      var opts leaveOptionsV1
+      if err := json.Unmarshal(call.Params.Options, &opts); err != nil {
+        return nil, err
+      }
+      reply := LeaveV1(kb.g, context.Background(), opts)
+      reply.Jsonrpc = call.Jsonrpc
+      reply.ID = call.ID
+      b := new(bytes.Buffer)
+      enc := json.NewEncoder(b)
+      enc.Encode(reply)
+      return b.Bytes(), nil
     case methodAdvertiseCommands:
-      return nil, nil
+      if len(call.Params.Options) == 0 {
+        return nil, ErrInvalidOptions{version: 1, method: methodAdvertiseCommands,
+          err: errors.New("empty options")}
+      }
+      var opts advertiseCommandsOptionsV1
+      if err := json.Unmarshal(call.Params.Options, &opts); err != nil {
+        return nil, err
+      }
+      reply := AdvertiseCommandsV1(kb.g, context.Background(), opts)
+      reply.Jsonrpc = call.Jsonrpc
+      reply.ID = call.ID
+      b := new(bytes.Buffer)
+      enc := json.NewEncoder(b)
+      enc.Encode(reply)
+      return b.Bytes(), nil
     case methodClearCommands:
-      return nil, nil
+      reply := ClearCommandsV1(kb.g, context.Background())
+      reply.Jsonrpc = call.Jsonrpc
+      reply.ID = call.ID
+      b := new(bytes.Buffer)
+      enc := json.NewEncoder(b)
+      enc.Encode(reply)
+      return b.Bytes(), nil
     case methodListCommands:
-      return nil, nil
+      if len(call.Params.Options) == 0 {
+        return nil, ErrInvalidOptions{version: 1, method: methodListCommands,
+          err: errors.New("empty options")}
+      }
+      var opts listCommandsOptionsV1
+      if err := json.Unmarshal(call.Params.Options, &opts); err != nil {
+        return nil, err
+      }
+      reply := ListCommandsV1(kb.g, context.Background(), opts)
+      reply.Jsonrpc = call.Jsonrpc
+      reply.ID = call.ID
+      b := new(bytes.Buffer)
+      enc := json.NewEncoder(b)
+      enc.Encode(reply)
+      return b.Bytes(), nil
     case methodListMembers:
-      return nil, nil
+      if len(call.Params.Options) == 0 {
+        return nil, ErrInvalidOptions{version: 1, method: methodListMembers, err: errors.New("empty options")}
+      }
+      var opts listMembersOptionsV1
+      if err := json.Unmarshal(call.Params.Options, &opts); err != nil {
+        return nil, err
+      }
+      reply := ListMembersV1(kb.g, context.Background(), opts)
+      reply.Jsonrpc = call.Jsonrpc
+      reply.ID = call.ID
+      b := new(bytes.Buffer)
+      enc := json.NewEncoder(b)
+      enc.Encode(reply)
+      return b.Bytes(), nil
     default:
-      return nil, nil
+      return nil, ErrInvalidMethod{name: call.Method, version: 1}
     }
   }
   return nil, nil

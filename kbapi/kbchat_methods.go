@@ -7,6 +7,8 @@ import(
     "github.com/keybase/client/go/libkb"
     "github.com/keybase/client/go/chat/utils"
     "github.com/keybase/client/go/chat"
+    "github.com/keybase/go-framed-msgpack-rpc/rpc"
+    gregor1 "github.com/keybase/client/go/protocol/gregor1"
     "context"
     "time"
     "errors"
@@ -115,6 +117,20 @@ func (c ChatMessage) Valid() bool {
   return len(c.Body) > 0
 }
 
+type sendArgV1 struct {
+  // convQuery  chat1.GetInboxLocalQuery
+  conversationID    chat1.ConversationID
+  channel           ChatChannel
+  body              chat1.MessageBody
+  mtype             chat1.MessageType
+  supersedes        chat1.MessageID
+  deletes           []chat1.MessageID
+  response          string
+  nonblock          bool
+  ephemeralLifetime time.Duration
+  replyTo           *chat1.MessageID
+}
+
 type listOptionsV1 struct {
   ConversationID chat1.ConvIDStr `json:"conversation_id,omitempty"`
   UnreadOnly     bool            `json:"unread_only,omitempty"`
@@ -141,6 +157,12 @@ type sendOptionsV1 struct {
   EphemeralLifetime time.Duration     `json:"exploding_lifetime"`
   ConfirmLumenSend  bool              `json:"confirm_lumen_send"`
   ReplyTo           *chat1.MessageID  `json:"reply_to"`
+}
+
+type postHeader struct {
+  conversationID chat1.ConversationID
+  clientHeader   chat1.MessageClientHeader
+  rateLimits     []chat1.RateLimit
 }
 
 type getOptionsV1 struct {
@@ -203,6 +225,39 @@ type listCommandsOptionsV1 struct {
 type listMembersOptionsV1 struct {
   Channel        ChatChannel
   ConversationID chat1.ConvIDStr `json:"conversation_id"`
+}
+
+type ChatAPIUI struct {
+  utils.DummyChatUI
+  sessionID            int
+  allowStellarPayments bool
+}
+
+var _ chat1.ChatUiInterface = (*ChatAPIUI)(nil)
+
+func AllowStellarPayments(enabled bool) func(*ChatAPIUI) {
+  return func(c *ChatAPIUI) {
+    c.SetAllowStellarPayments(enabled)
+  }
+}
+
+func NewChatAPIUI(opts ...func(*ChatAPIUI)) *ChatAPIUI {
+  c := &ChatAPIUI{
+    DummyChatUI: utils.DummyChatUI{},
+    sessionID:   randSessionID(),
+  }
+  for _, o := range opts {
+    o(c)
+  }
+  return c
+}
+
+func (u *ChatAPIUI) ChatStellarDataConfirm(ctx context.Context, arg chat1.ChatStellarDataConfirmArg) (bool, error) {
+  return u.allowStellarPayments, nil
+}
+
+func (u *ChatAPIUI) SetAllowStellarPayments(enabled bool) {
+  u.allowStellarPayments = enabled
 }
 
 func ListV1(g *libkb.GlobalContext, ctx context.Context, opts listOptionsV1) Reply {
@@ -355,10 +410,422 @@ func GetV1(g *libkb.GlobalContext, ctx context.Context, opts getOptionsV1) Reply
   return Reply{Result: thread}
 }
 
+// SendV1 implements ChatServiceHandler.SendV1.
+func SendV1(g *libkb.GlobalContext, ctx context.Context, opts sendOptionsV1, chatUI chat1.ChatUiInterface) Reply {
+  convID, err := chat1.MakeConvID(opts.ConversationID.String())
+  if err != nil {
+    return errReply(fmt.Errorf("invalid conv ID: %s", opts.ConversationID))
+  }
+  arg := sendArgV1{
+    conversationID:    convID,
+    channel:           opts.Channel,
+    body:              chat1.NewMessageBodyWithText(chat1.MessageText{Body: opts.Message.Body}),
+    mtype:             chat1.MessageType_TEXT,
+    response:          "message sent",
+    nonblock:          opts.Nonblock,
+    ephemeralLifetime: opts.EphemeralLifetime,
+    replyTo:           opts.ReplyTo,
+  }
+  return sendV1(g, ctx, arg, chatUI)
+}
+
+func sendV1(g *libkb.GlobalContext, ctx context.Context, arg sendArgV1, chatUI chat1.ChatUiInterface) Reply {
+  kbchatUI := newDelegateChatUI()
+  kbchatUI.RegisterChatUI(chatUI)
+  defer kbchatUI.DeregisterChatUI(chatUI)
+
+  cclient, err := client.GetChatLocalClient(g)
+  if err != nil {
+    return errReply(err)
+  }
+  protocols := []rpc.Protocol{
+    chat1.ChatUiProtocol(kbchatUI),
+  }
+  if err := client.RegisterProtocolsWithContext(protocols, g); err != nil {
+    return errReply(err)
+  }
+
+  var rl []chat1.RateLimit
+  existing, existingRl, err := getExistingConvs(g, ctx, arg.conversationID, arg.channel)
+  if err != nil {
+    return errReply(err)
+  }
+  rl = append(rl, existingRl...)
+
+  header, err := makePostHeader(g, ctx, arg, existing)
+  if err != nil {
+    return errReply(err)
+  }
+  rl = append(rl, header.rateLimits...)
+
+  postArg := chat1.PostLocalArg{
+      SessionID:      getSessionID(chatUI),
+      ConversationID: header.conversationID,
+      Msg: chat1.MessagePlaintext{
+      ClientHeader: header.clientHeader,
+      MessageBody:  arg.body,
+    },
+    ReplyTo:          arg.replyTo,
+    IdentifyBehavior: keybase1.TLFIdentifyBehavior_CHAT_CLI,
+  }
+  var idFails []keybase1.TLFIdentifyFailure
+  var msgID *chat1.MessageID
+  var obid *chat1.OutboxID
+  if arg.nonblock {
+    var nbarg chat1.PostLocalNonblockArg
+    nbarg.ConversationID = postArg.ConversationID
+    nbarg.Msg = postArg.Msg
+    nbarg.IdentifyBehavior = postArg.IdentifyBehavior
+    plres, err := cclient.PostLocalNonblock(ctx, nbarg)
+    if err != nil {
+      return errReply(err)
+    }
+    obid = &plres.OutboxID
+    rl = append(rl, plres.RateLimits...)
+    idFails = plres.IdentifyFailures
+  } else {
+    plres, err := cclient.PostLocal(ctx, postArg)
+    if err != nil {
+      return errReply(err)
+    }
+    msgID = &plres.MessageID
+    rl = append(rl, plres.RateLimits...)
+    idFails = plres.IdentifyFailures
+  }
+
+  res := chat1.SendRes{
+    Message:          arg.response,
+    MessageID:        msgID,
+    OutboxID:         obid,
+    RateLimits:       aggRateLimits(rl),
+    IdentifyFailures: idFails,
+  }
+
+  return Reply{Result: res}
+}
+
+func EditV1(g *libkb.GlobalContext, ctx context.Context, opts editOptionsV1) Reply {
+  convID, err := chat1.MakeConvID(opts.ConversationID.String())
+  if err != nil {
+    return errReply(fmt.Errorf("invalid conv ID: %s", opts.ConversationID))
+  }
+  arg := sendArgV1{
+    conversationID: convID,
+    channel:        opts.Channel,
+    body:           chat1.NewMessageBodyWithEdit(chat1.MessageEdit{MessageID: opts.MessageID, Body: opts.Message.Body}),
+    mtype:          chat1.MessageType_EDIT,
+    supersedes:     opts.MessageID,
+    response:       "message edited",
+  }
+  return sendV1(g, ctx, arg, utils.DummyChatUI{})
+}
+
+func ReactionV1(g *libkb.GlobalContext, ctx context.Context, opts reactionOptionsV1) Reply {
+  convID, err := chat1.MakeConvID(opts.ConversationID.String())
+  if err != nil {
+    return errReply(fmt.Errorf("invalid conv ID: %s", opts.ConversationID))
+  }
+  arg := sendArgV1{
+    conversationID: convID,
+    channel:        opts.Channel,
+    body:           chat1.NewMessageBodyWithReaction(chat1.MessageReaction{MessageID: opts.MessageID, Body: opts.Message.Body}),
+    mtype:          chat1.MessageType_REACTION,
+    supersedes:     opts.MessageID,
+    response:       "message reacted to",
+  }
+  return sendV1(g, ctx, arg, utils.DummyChatUI{})
+}
+
+func AttachV1(g *libkb.GlobalContext, ctx context.Context, opts attachOptionsV1,
+  chatUI chat1.ChatUiInterface, notifyUI chat1.NotifyChatInterface) Reply {
+  var rl []chat1.RateLimit
+  convID, err := chat1.MakeConvID(opts.ConversationID.String())
+  if err != nil {
+    return errReply(fmt.Errorf("invalid conv ID: %s", opts.ConversationID))
+  }
+  sarg := sendArgV1{
+    conversationID:    convID,
+    channel:           opts.Channel,
+    mtype:             chat1.MessageType_ATTACHMENT,
+    ephemeralLifetime: opts.EphemeralLifetime,
+  }
+  existing, existingRl, err := getExistingConvs(g, ctx, sarg.conversationID, sarg.channel)
+  if err != nil {
+    return errReply(err)
+  }
+  rl = append(rl, existingRl...)
+
+  header, err := makePostHeader(g, ctx, sarg, existing)
+  if err != nil {
+    return errReply(err)
+  }
+  rl = append(rl, header.rateLimits...)
+
+  vis := keybase1.TLFVisibility_PRIVATE
+  if header.clientHeader.TlfPublic {
+    vis = keybase1.TLFVisibility_PUBLIC
+  }
+  var ephemeralLifetime *gregor1.DurationSec
+  if header.clientHeader.EphemeralMetadata != nil {
+    ephemeralLifetime = &header.clientHeader.EphemeralMetadata.Lifetime
+  }
+  arg := chat1.PostFileAttachmentArg{
+    ConversationID:    header.conversationID,
+    TlfName:           header.clientHeader.TlfName,
+    Visibility:        vis,
+    Filename:          opts.Filename,
+    Title:             opts.Title,
+    EphemeralLifetime: ephemeralLifetime,
+  }
+  // check for preview
+  if len(opts.Preview) > 0 {
+    loc := chat1.NewPreviewLocationWithFile(opts.Preview)
+    arg.CallerPreview = &chat1.MakePreviewRes{
+      Location: &loc,
+    }
+  }
+  kbchatUI := newDelegateChatUI()
+  kbchatUI.RegisterChatUI(chatUI)
+  defer kbchatUI.DeregisterChatUI(chatUI)
+  cclient, err := client.GetChatLocalClient(g)
+  if err != nil {
+    return errReply(err)
+  }
+  protocols := []rpc.Protocol{
+    client.NewStreamUIProtocol(g),
+    chat1.ChatUiProtocol(kbchatUI),
+    chat1.NotifyChatProtocol(notifyUI),
+  }
+  if err := client.RegisterProtocolsWithContext(protocols,g); err != nil {
+    return errReply(err)
+  }
+  cli, err := client.GetNotifyCtlClient(g)
+  if err != nil {
+    return errReply(err)
+  }
+  channels := keybase1.NotificationChannels{
+    Chatattachments: true,
+  }
+  if err := cli.SetNotifications(context.TODO(), channels); err != nil {
+    return errReply(err)
+  }
+
+  var pres chat1.PostLocalRes
+  pres, err = cclient.PostFileAttachmentLocal(ctx, chat1.PostFileAttachmentLocalArg{
+    SessionID: getSessionID(chatUI),
+    Arg:       arg,
+  })
+  rl = append(rl, pres.RateLimits...)
+  if err != nil {
+    return errReply(err)
+  }
+
+  res := chat1.SendRes{
+    Message:    "attachment sent",
+    MessageID:  &pres.MessageID,
+    RateLimits: aggRateLimits(rl),
+  }
+
+  return Reply{Result: res}
+}
+
+func ListConvsOnNameV1(g *libkb.GlobalContext, ctx context.Context, opts listConvsOnNameOptionsV1) Reply {
+  cclient, err := client.GetChatLocalClient(g)
+  if err != nil {
+    return errReply(err)
+  }
+  topicType, err := TopicTypeFromStrDefault(opts.TopicType)
+  if err != nil {
+    return errReply(err)
+  }
+  mt := client.MembersTypeFromStrDefault(opts.MembersType, g.GetEnv())
+
+  listRes, err := cclient.GetTLFConversationsLocal(ctx, chat1.GetTLFConversationsLocalArg{
+    TlfName:     opts.Name,
+    TopicType:   topicType,
+    MembersType: mt,
+  })
+  if err != nil {
+    return errReply(err)
+  }
+  var cl chat1.ChatList
+  cl.RateLimits = aggRateLimits(listRes.RateLimits)
+  for _, conv := range listRes.Convs {
+    cl.Conversations = append(cl.Conversations, utils.ExportToSummary(conv))
+  }
+  return Reply{Result: cl}
+}
+
+func JoinV1(g *libkb.GlobalContext, ctx context.Context, opts joinOptionsV1) Reply {
+  cclient, err := client.GetChatLocalClient(g)
+  if err != nil {
+    return errReply(err)
+  }
+  convID, rl, err := resolveAPIConvID(g, ctx, opts.ConversationID, opts.Channel)
+  if err != nil {
+    return errReply(err)
+  }
+  res, err := cclient.JoinConversationByIDLocal(ctx, convID)
+  if err != nil {
+    return errReply(err)
+  }
+  allLimits := append(rl, res.RateLimits...)
+  cres := chat1.EmptyRes{
+    RateLimits: aggRateLimits(allLimits),
+  }
+  return Reply{Result: cres}
+}
+
+func LeaveV1(g *libkb.GlobalContext, ctx context.Context, opts leaveOptionsV1) Reply {
+  cclient, err := client.GetChatLocalClient(g)
+  if err != nil {
+    return errReply(err)
+  }
+  convID, rl, err := resolveAPIConvID(g, ctx, opts.ConversationID, opts.Channel)
+  if err != nil {
+    return errReply(err)
+  }
+  res, err := cclient.LeaveConversationLocal(ctx, convID)
+  if err != nil {
+    return errReply(err)
+  }
+  allLimits := append(rl, res.RateLimits...)
+  cres := chat1.EmptyRes{
+    RateLimits: aggRateLimits(allLimits),
+  }
+  return Reply{Result: cres}
+}
+
+func AdvertiseCommandsV1(g *libkb.GlobalContext, ctx context.Context, opts advertiseCommandsOptionsV1) Reply {
+  cclient, err := client.GetChatLocalClient(g)
+  if err != nil {
+    return errReply(err)
+  }
+  var alias *string
+  if opts.Alias != "" {
+    alias = new(string)
+    *alias = opts.Alias
+  }
+  var ads []chat1.AdvertiseCommandsParam
+  for _, ad := range opts.Advertisements {
+    typ, err := getAdvertTyp(ad.Typ)
+    if err != nil {
+      return errReply(err)
+    }
+    var teamName *string
+    if ad.TeamName != "" {
+      adTeamName := ad.TeamName
+      teamName = &adTeamName
+    }
+    ads = append(ads, chat1.AdvertiseCommandsParam{
+      Typ:      typ,
+      Commands: ad.Commands,
+      TeamName: teamName,
+    })
+  }
+  res, err := cclient.AdvertiseBotCommandsLocal(ctx, chat1.AdvertiseBotCommandsLocalArg{
+    Alias:          alias,
+    Advertisements: ads,
+  })
+  if err != nil {
+    return errReply(err)
+  }
+  return Reply{Result: res}
+}
+
+func ClearCommandsV1(g *libkb.GlobalContext, ctx context.Context) Reply {
+  cclient, err := client.GetChatLocalClient(g)
+  if err != nil {
+    return errReply(err)
+  }
+  res, err := cclient.ClearBotCommandsLocal(ctx)
+  if err != nil {
+    return errReply(err)
+  }
+  return Reply{Result: res}
+}
+
+func ListCommandsV1(g *libkb.GlobalContext, ctx context.Context, opts listCommandsOptionsV1) Reply {
+  cclient, err := client.GetChatLocalClient(g)
+  if err != nil {
+    return errReply(err)
+  }
+  convID, rl, err := resolveAPIConvID(g, ctx, opts.ConversationID, opts.Channel)
+  if err != nil {
+    return errReply(err)
+  }
+  lres, err := cclient.ListBotCommandsLocal(ctx, convID)
+  if err != nil {
+    return errReply(err)
+  }
+  res := chat1.ListCommandsRes{
+    Commands: lres.Commands,
+  }
+  res.RateLimits = aggRateLimits(append(rl, lres.RateLimits...))
+  return Reply{Result: res}
+}
+
+func ListMembersV1(g *libkb.GlobalContext, ctx context.Context, opts listMembersOptionsV1) Reply {
+  conv, _, err := findConversation(g, ctx, opts.ConversationID, opts.Channel)
+  if err != nil {
+    return errReply(err)
+  }
+
+  chatClient, err := client.GetChatLocalClient(g)
+  if err != nil {
+    return errReply(err)
+  }
+  teamID, err := chatClient.TeamIDFromTLFName(ctx, chat1.TeamIDFromTLFNameArg{
+    TlfName:     conv.Info.TlfName,
+    MembersType: conv.Info.MembersType,
+    TlfPublic:   conv.Info.Visibility == keybase1.TLFVisibility_PUBLIC,
+  })
+  if err != nil {
+    return errReply(err)
+  }
+
+  cli, err := client.GetTeamsClient(g)
+  if err != nil {
+    return errReply(err)
+  }
+  details, err := cli.TeamGetByID(context.Background(), keybase1.TeamGetByIDArg{Id: teamID})
+  if err != nil {
+    return errReply(err)
+  }
+
+  // filter the member list down to the specific conversation members based on the server-trust list
+  if conv.Info.TopicName != "" && opts.Channel.TopicName != "general" {
+    details = keybase1.FilterTeamDetailsForMembers(conv.AllNames(), details)
+  }
+
+  return Reply{Result: details}
+}
 
 
 
 
+
+func getAdvertTyp(typ string) (chat1.BotCommandsAdvertisementTyp, error) {
+  switch typ {
+  case "public":
+    return chat1.BotCommandsAdvertisementTyp_PUBLIC, nil
+  case "teamconvs":
+    return chat1.BotCommandsAdvertisementTyp_TLFID_CONVS, nil
+  case "teammembers":
+    return chat1.BotCommandsAdvertisementTyp_TLFID_MEMBERS, nil
+  default:
+    return chat1.BotCommandsAdvertisementTyp_PUBLIC, fmt.Errorf("unknown advertisement type %q", typ)
+  }
+}
+
+func resolveAPIConvID(g *libkb.GlobalContext, ctx context.Context, convID chat1.ConvIDStr,
+  channel ChatChannel) (chat1.ConversationID, []chat1.RateLimit, error) {
+  conv, limits, err := findConversation(g, ctx, convID, channel)
+  if err != nil {
+    return chat1.ConversationID{}, nil, err
+  }
+  return conv.Info.Id, limits, nil
+}
 
 func errReply(err error) Reply {
   if rlerr, ok := err.(libkb.ChatRateLimitError); ok {
@@ -619,4 +1086,74 @@ func isValidMembersType(mt string) bool {
     }
   }
   return false
+}
+
+func makePostHeader(g *libkb.GlobalContext, ctx context.Context, arg sendArgV1, existing []chat1.ConversationLocal) (*postHeader, error) {
+  client, err := client.GetChatLocalClient(g)
+  if err != nil {
+    return nil, err
+  }
+
+  membersType := arg.channel.GetMembersType(g.GetEnv())
+  var header postHeader
+  var convTriple chat1.ConversationIDTriple
+  var tlfName string
+  var visibility keybase1.TLFVisibility
+  switch len(existing) {
+  case 0:
+    visibility = keybase1.TLFVisibility_PRIVATE
+    if arg.channel.Public {
+      visibility = keybase1.TLFVisibility_PUBLIC
+    }
+    tt, err := TopicTypeFromStrDefault(arg.channel.TopicType)
+    if err != nil {
+      return nil, err
+    }
+
+    var topicName *string
+    if arg.channel.TopicName != "" {
+      topicName = &arg.channel.TopicName
+    }
+    channelName := arg.channel.Name
+    ncres, err := client.NewConversationLocal(ctx, chat1.NewConversationLocalArg{
+      TlfName:          channelName,
+      TlfVisibility:    visibility,
+      TopicName:        topicName,
+      TopicType:        tt,
+      IdentifyBehavior: keybase1.TLFIdentifyBehavior_CHAT_CLI,
+      MembersType:      membersType,
+    })
+    if err != nil {
+      return nil, err
+    }
+    header.rateLimits = append(header.rateLimits, ncres.RateLimits...)
+    convTriple = ncres.Conv.Info.Triple
+    tlfName = ncres.Conv.Info.TlfName
+    visibility = ncres.Conv.Info.Visibility
+    header.conversationID = ncres.Conv.Info.Id
+  case 1:
+    convTriple = existing[0].Info.Triple
+    tlfName = existing[0].Info.TlfName
+    visibility = existing[0].Info.Visibility
+    header.conversationID = existing[0].Info.Id
+  default:
+    return nil, fmt.Errorf("multiple conversations matched")
+  }
+  var ephemeralMetadata *chat1.MsgEphemeralMetadata
+  if arg.ephemeralLifetime != 0 && membersType != chat1.ConversationMembersType_KBFS {
+    ephemeralLifetime := gregor1.ToDurationSec(arg.ephemeralLifetime)
+    ephemeralMetadata = &chat1.MsgEphemeralMetadata{Lifetime: ephemeralLifetime}
+  }
+
+  header.clientHeader = chat1.MessageClientHeader{
+    Conv:              convTriple,
+    TlfName:           tlfName,
+    TlfPublic:         visibility == keybase1.TLFVisibility_PUBLIC,
+    MessageType:       arg.mtype,
+    Supersedes:        arg.supersedes,
+    Deletes:           arg.deletes,
+    EphemeralMetadata: ephemeralMetadata,
+  }
+
+  return &header, nil
 }
