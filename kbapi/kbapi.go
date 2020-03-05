@@ -3,7 +3,6 @@ package kbapi
 import(
     "github.com/keybase/client/go/externals"
     "github.com/keybase/client/go/libkb"
-    "github.com/keybase/client/go/client"
     "github.com/keybase/client/go/chat/utils"
     "context"
     "fmt"
@@ -52,12 +51,12 @@ func (e ErrInvalidOptions) Error() string {
 }
 
 type ErrInvalidMethod struct {
-	name    string
-	version int
+  name    string
+  version int
 }
 
 func (e ErrInvalidMethod) Error() string {
-	return fmt.Sprintf("invalid v%d method %q", e.version, e.name)
+  return fmt.Sprintf("invalid v%d method %q", e.version, e.name)
 }
 
 type Kbapi struct {
@@ -83,12 +82,7 @@ func (kb*Kbapi) GetUsername() string {
   return kb.g.Env.GetUsername().String()
 }
 
-func (kb*Kbapi) StartChatApi(){
-  c := client.NewCmdChatAPIRunner(kb.g)
-        c.Run()
-}
-
-func (kb*Kbapi) SendApi(apiInput string) (b []byte, err error) {
+func (kb*Kbapi) SendChatApi(apiInput string) (b []byte, err error) {
   var call Call
   dec := json.NewDecoder(strings.NewReader(apiInput))
   for {
@@ -304,6 +298,146 @@ func (kb*Kbapi) SendApi(apiInput string) (b []byte, err error) {
         return nil, err
       }
       reply := ListMembersV1(kb.g, context.Background(), opts)
+      reply.Jsonrpc = call.Jsonrpc
+      reply.ID = call.ID
+      b := new(bytes.Buffer)
+      enc := json.NewEncoder(b)
+      enc.Encode(reply)
+      return b.Bytes(), nil
+    default:
+      return nil, ErrInvalidMethod{name: call.Method, version: 1}
+    }
+  }
+  return nil, nil
+}
+
+func (kb*Kbapi) SendTeamApi(apiInput string) (b []byte, err error){
+  var call Call
+  dec := json.NewDecoder(strings.NewReader(apiInput))
+  for {
+    if err := dec.Decode(&call); err == io.EOF {
+      break
+    } else if err != nil {
+      if err == io.ErrUnexpectedEOF {
+        fmt.Printf("expected more JSON in input\n")
+        return nil, err
+      }
+      return nil, err
+    }
+    fmt.Printf("Method: %s\n", call.Method)
+    if len(call.Params.Options) == 0 {
+      if call.Method != "list-self-memberships" {
+        return nil, ErrInvalidOptions{version: 1, method: call.Method, err: errors.New("empty options")}
+      }
+    }
+    switch call.Method {
+    case listTeamMethod:
+      var opts listTeamOptions
+      if len(call.Params.Options) == 0 {
+        return nil, ErrInvalidOptions{version: 1, method: listTeamMethod, err: errors.New("empty options")}
+      }
+      if err := json.Unmarshal(call.Params.Options, &opts); err != nil {
+        return nil, err
+      }
+      reply := listTeamMemberships(kb.g, context.Background(), opts)
+      reply.Jsonrpc = call.Jsonrpc
+      reply.ID = call.ID
+      b := new(bytes.Buffer)
+      enc := json.NewEncoder(b)
+      enc.Encode(reply)
+      return b.Bytes(), nil
+
+    case listUserMethod:
+      var opts listUserOptions
+      if len(call.Params.Options) == 0 {
+        return nil, ErrInvalidOptions{version: 1, method: listUserMethod, err: errors.New("empty options")}
+      }
+      if err := json.Unmarshal(call.Params.Options, &opts); err != nil {
+        return nil, err
+      }
+      reply := listUserMemberships(kb.g, context.Background(), opts)
+      reply.Jsonrpc = call.Jsonrpc
+      reply.ID = call.ID
+      b := new(bytes.Buffer)
+      enc := json.NewEncoder(b)
+      enc.Encode(reply)
+      return b.Bytes(), nil
+    default:
+      return nil, ErrInvalidMethod{name: call.Method, version: 1}
+    }
+  }
+  return nil, nil
+}
+
+func (kb*Kbapi) SendKvstoreApi(apiInput string) (b []byte, err error){
+  var call Call
+  dec := json.NewDecoder(strings.NewReader(apiInput))
+  for {
+    if err := dec.Decode(&call); err == io.EOF {
+      break
+    } else if err != nil {
+      if err == io.ErrUnexpectedEOF {
+        fmt.Printf("expected more JSON in input\n")
+        return nil, err
+      }
+      return nil, err
+    }
+    fmt.Printf("Method: %s\n", call.Method)
+    switch call.Method {
+    case getEntryMethod:
+      var opts getEntryOptions
+      if len(call.Params.Options) == 0 {
+        return nil, ErrInvalidOptions{version: 1, method: getEntryMethod, err: errors.New("empty options")}
+      }
+      if err := json.Unmarshal(call.Params.Options, &opts); err != nil {
+        return nil, err
+      }
+      reply := getEntry(kb.g, context.Background(), opts)
+      reply.Jsonrpc = call.Jsonrpc
+      reply.ID = call.ID
+      b := new(bytes.Buffer)
+      enc := json.NewEncoder(b)
+      enc.Encode(reply)
+      return b.Bytes(), nil
+    case putEntryMethod:
+      var opts putEntryOptions
+      if len(call.Params.Options) == 0 {
+        return nil, ErrInvalidOptions{version: 1, method: putEntryMethod, err: errors.New("empty options")}
+      }
+      if err := json.Unmarshal(call.Params.Options, &opts); err != nil {
+        return nil, err
+      }
+      reply := putEntry(kb.g, context.Background(), opts)
+      reply.Jsonrpc = call.Jsonrpc
+      reply.ID = call.ID
+      b := new(bytes.Buffer)
+      enc := json.NewEncoder(b)
+      enc.Encode(reply)
+      return b.Bytes(), nil
+    case listMethod:
+      var opts listOptions
+      if len(call.Params.Options) == 0 {
+        return nil, ErrInvalidOptions{version: 1, method: listUserMethod, err: errors.New("empty options")}
+      }
+      if err := json.Unmarshal(call.Params.Options, &opts); err != nil {
+        return nil, err
+      }
+      reply := listEntries(kb.g, context.Background(), opts)
+      reply.Jsonrpc = call.Jsonrpc
+      reply.ID = call.ID
+      b := new(bytes.Buffer)
+      enc := json.NewEncoder(b)
+      enc.Encode(reply)
+      return b.Bytes(), nil
+    case delEntryMethod:
+      var opts deleteEntryOptions
+      if len(call.Params.Options) == 0 {
+        return nil, ErrInvalidOptions{version: 1, method: delEntryMethod, err: errors.New("empty options")}
+      }
+      if err := json.Unmarshal(call.Params.Options, &opts); err != nil {
+        return nil, err
+      }
+      reply := deleteEntry(kb.g, context.Background(), opts)
       reply.Jsonrpc = call.Jsonrpc
       reply.ID = call.ID
       b := new(bytes.Buffer)

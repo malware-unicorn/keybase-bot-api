@@ -25,7 +25,22 @@ func main(){
     //teststr2 := `{"method": "advertisecommands", "params": {"options":{"alias": "giteabottest", "advertisements":[{"type": "public", "commands": [{"name": "malwareunicorn", "description": "This is just a test"}]}]}}}`
     //teststr2 := `{"method": "clearcommands"}`
     //teststr2 := `{"method": "listcommands", "params": {"options": {"channel": {"name": "giteabottest,malwareunicorn"}}}}`
-    teststr2 := `{"method": "listmembers", "params": {"options": {"conversation_id":"0000a37ea2048dbd087a13cb784631d63a46fb87f2ce13beadde229a7a0e85d5"}}}`
-    b, _ := kbapi.SendApi(teststr2)
-    fmt.Printf("%s\n", b)
+    //teststr2 := `{"method": "listmembers", "params": {"options": {"conversation_id":"0000a37ea2048dbd087a13cb784631d63a46fb87f2ce13beadde229a7a0e85d5"}}}`
+    //b, _ := kbapi.SendChatApi(teststr2)
+    //fmt.Printf("%s\n", b)
+    //teststr3 := `{"method": "list-team-memberships", "params": {"options": {"team": "nacl_miners"}}}`
+    teststr3 := `{"method": "list-user-memberships", "params": {"options": {"username": "malwareunicorn"}}}`
+    t, err := kbapi.SendTeamApi(teststr3)
+    if err != nil {
+      fmt.Printf("%v\n", err)
+    } else {
+      fmt.Printf("%s\n", t)
+    }
+    teststr4 := `{"method": "list", "params": {"options": {"team": "nacl_miners"}}}`
+    t, err = kbapi.SendKvstoreApi(teststr4)
+    if err != nil {
+      fmt.Printf("%v\n", err)
+    } else {
+      fmt.Printf("%s\n", t)
+    }
 }

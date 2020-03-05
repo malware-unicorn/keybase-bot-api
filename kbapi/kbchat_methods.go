@@ -56,9 +56,6 @@ const (
   methodClearCommands       = "clearcommands" //
   methodListCommands        = "listcommands" //
   methodListMembers         = "listmembers" //
-  // team api
-  listTeamMethod      = "list-team-memberships"
-  listUserMethod      = "list-user-memberships"
 )
 
 /*
@@ -75,9 +72,6 @@ leaveOptionsV1
 advertiseCommandsOptionsV1
 listCommandsOptionsV1
 listMembersOptionsV1
-
-listTeamOptions
-listUserOptions
 */
 type ChatChannel chat1.ChatChannel
 
@@ -800,10 +794,6 @@ func ListMembersV1(g *libkb.GlobalContext, ctx context.Context, opts listMembers
 
   return Reply{Result: details}
 }
-
-
-
-
 
 func getAdvertTyp(typ string) (chat1.BotCommandsAdvertisementTyp, error) {
   switch typ {
