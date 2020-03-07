@@ -20,15 +20,15 @@ type SubscriptionMessage struct {
 func main(){
 
     kb := kbapi.NewKbApi()
-    testList := `{"method":"list", "params": { "options": { "unread_only": true}}}`
-    t, err := kb.SendTeamApi(testList)
+    testList := `{"method":"list", "params": { "options": { "unread_only": false}}}`
+    t, err := kb.SendChatApi(testList)
     if err != nil {
       fmt.Printf("%v\n", err)
     } else {
       fmt.Printf("%s\n", t)
     }
     testUserMembership := `{"method": "list-user-memberships", "params": {"options": {"username": "malwareunicorn"}}}`
-    t, err := kb.SendTeamApi(testUserMembership)
+    t, err = kb.SendTeamApi(testUserMembership)
     if err != nil {
       fmt.Printf("%v\n", err)
     } else {

@@ -92,13 +92,13 @@ func (kb*Kbapi) ReadListener(output io.Reader) (b []byte, err error) {
   outBuffer := make([]byte, 0)
   for {
 
-      data := make([]byte, 64)
+      data := make([]byte, 1024)
       n, err := output.Read(data)
       if err != nil {
         return nil, err
       }
       outBuffer = append(outBuffer, data[:n]...)
-      if n < 64 && 0 < n {
+      if n < 1024 && 0 < n {
         return outBuffer, nil
       }
   }
