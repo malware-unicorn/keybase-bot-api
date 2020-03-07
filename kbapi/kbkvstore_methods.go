@@ -8,18 +8,6 @@ import(
     "golang.org/x/net/context"
     "fmt"
 )
-/*
-kvstore api methods:
-put
-del
-get
-list
-
-getEntryOptions
-putEntryOptions
-deleteEntryOptions
-listOptions
-*/
 
 const (
   getEntryMethod = "get"

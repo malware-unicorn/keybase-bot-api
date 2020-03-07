@@ -976,14 +976,35 @@ func formatMessages(ctx context.Context, messages []chat1.MessageUnboxed,
   return ret, nil
 }
 
+
+func getAllTeamConvs(g *libkb.GlobalContext, ctx context.Context, name string, topicType *chat1.TopicType) ([]chat1.ConversationLocal, []chat1.RateLimit, error) {
+	cclient, err := client.GetChatLocalClient(g)
+	if err != nil {
+		return nil, nil, err
+	}
+	res, err := cclient.GetInboxAndUnboxLocal(ctx, chat1.GetInboxAndUnboxLocalArg{
+		Query: &chat1.GetInboxLocalQuery{
+			Name: &chat1.NameQuery{
+				Name:        name,
+				MembersType: chat1.ConversationMembersType_TEAM,
+			},
+			TopicType: topicType,
+		},
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+	return res.Conversations, res.RateLimits, nil
+}
+
 func getExistingConvs(g *libkb.GlobalContext, ctx context.Context, convID chat1.ConversationID,
   channel ChatChannel) ([]chat1.ConversationLocal, []chat1.RateLimit, error) {
-  client, err := client.GetChatLocalClient(g)
+  cclient, err := client.GetChatLocalClient(g)
   if err != nil {
     return nil, nil, err
   }
   if !convID.IsNil() {
-    gilres, err := client.GetInboxAndUnboxLocal(ctx, chat1.GetInboxAndUnboxLocalArg{
+    gilres, err := cclient.GetInboxAndUnboxLocal(ctx, chat1.GetInboxAndUnboxLocalArg{
       Query: &chat1.GetInboxLocalQuery{
         ConvIDs: []chat1.ConversationID{convID},
       },
@@ -1011,7 +1032,7 @@ func getExistingConvs(g *libkb.GlobalContext, ctx context.Context, convID chat1.
   if err != nil {
     return nil, nil, err
   }
-  findRes, err := client.FindConversationsLocal(ctx, chat1.FindConversationsLocalArg{
+  findRes, err := cclient.FindConversationsLocal(ctx, chat1.FindConversationsLocalArg{
     TlfName:          tlfName,
     MembersType:      channel.GetMembersType(g.GetEnv()),
     Visibility:       vis,
@@ -1067,6 +1088,16 @@ func TopicTypeFromStrDefault(str string) (chat1.TopicType, error) {
     return chat1.TopicType_NONE, fmt.Errorf("invalid topic type: '%v'", str)
   }
   return tt, nil
+}
+
+func MembersTypeFromStrDefault(str string, e *libkb.Env) chat1.ConversationMembersType {
+	if typ, ok := chat1.ConversationMembersTypeMap[strings.ToUpper(str)]; ok {
+		return typ
+	}
+	if e.GetChatMemberType() == "impteam" {
+		return chat1.ConversationMembersType_IMPTEAMNATIVE
+	}
+	return chat1.ConversationMembersType_KBFS
 }
 
 func isValidMembersType(mt string) bool {

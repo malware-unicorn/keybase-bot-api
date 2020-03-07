@@ -65,13 +65,14 @@ type Kbapi struct {
 
 func NewKbApi() *Kbapi {
   g := externals.NewGlobalContextInit()
-  kb := Kbapi{ g: g }
+  kb := Kbapi{
+    g: g,
+  }
   kb.g.Env.Test.UseProductionRunMode = true
   usage := libkb.Usage{
           API:       true,
           KbKeyring: true,
           Config:    true,
-          //Socket:    true,
   }
   kb.g.ConfigureUsage(usage);
   return &kb
@@ -80,6 +81,28 @@ func NewKbApi() *Kbapi {
 // Get Current Keybase Username.
 func (kb*Kbapi) GetUsername() string {
   return kb.g.Env.GetUsername().String()
+}
+
+func (kb*Kbapi) StartChatApiListener( input io.Writer){
+  opts := ListenOptions{Wallet: false, Convs: true}
+  ChatApiListen(kb.g, opts, input)
+}
+
+func (kb*Kbapi) ReadListener(output io.Reader) (b []byte, err error) {
+  outBuffer := make([]byte, 0)
+  for {
+
+      data := make([]byte, 64)
+      n, err := output.Read(data)
+      if err != nil {
+        return nil, err
+      }
+      outBuffer = append(outBuffer, data[:n]...)
+      if n < 64 && 0 < n {
+        return outBuffer, nil
+      }
+  }
+  return outBuffer, nil
 }
 
 func (kb*Kbapi) SendChatApi(apiInput string) (b []byte, err error) {
@@ -451,42 +474,7 @@ func (kb*Kbapi) SendKvstoreApi(apiInput string) (b []byte, err error){
   return nil, nil
 }
 
-func (kb*Kbapi) Test() {
-  var err error
-  teststr := `{"method":"list", "params": { "options": { "unread_only": true}}}`
-  //teststr := `{"method": "listconvsonname", "params": {"options": {"topic_type": "CHAT", "members_type": "team", "name": "nacl_miners"}}}`
-  dec := json.NewDecoder(strings.NewReader(teststr))
-  var call Call
-  defer func() {
-    if err != nil {
-      fmt.Printf("%v\n", err)
-      //err = encodeErr(call, err, w, false)
-    }
-  }()
-  for {
-    if err := dec.Decode(&call); err == io.EOF {
-      break
-    } else if err != nil {
-      if err == io.ErrUnexpectedEOF {
-        //return ErrInvalidJSON{message: "expected more JSON in input"}
-        fmt.Printf("expected more JSON in input\n")
-      }
-      return
-    }
-    fmt.Printf("Method: %s\n", call.Method)
-    var opts listOptionsV1
-    if len(call.Params.Options) != 0 {
-      if err := json.Unmarshal(call.Params.Options, &opts); err != nil {
-        return
-      }
-    }
-    reply := ListV1(kb.g, context.Background(), opts)
-    reply.Jsonrpc = call.Jsonrpc
-    reply.ID = call.ID
-    b := new(bytes.Buffer)
-    enc := json.NewEncoder(b)
-    enc.SetIndent("", "    ")
-    enc.Encode(reply)
-    fmt.Printf("%v\n", b)
-  }
+// TODO: too lazy to do this right now
+func (kb*Kbapi) SendWalletApi(apiInput string) (b []byte, err error) {
+  return nil, nil
 }
