@@ -20,6 +20,14 @@ type SubscriptionMessage struct {
 func main(){
 
     kb := kbapi.NewKbApi()
+
+    err := kb.SetConfig("enable_bot_lite_mode", true)
+    if err != nil {
+      fmt.Printf("%v\n", err)
+    }
+    if kb.GetGlobalContext().Env.GetEnableBotLiteMode(){
+      fmt.Printf("GetEnableBotLiteMode enabled\n")
+    }
     testList := `{"method":"list", "params": { "options": { "unread_only": false}}}`
     t, err := kb.SendChatApi(testList)
     if err != nil {

@@ -78,6 +78,15 @@ func NewKbApi() *Kbapi {
   return &kb
 }
 
+func (kb*Kbapi) GetGlobalContext() *libkb.GlobalContext {
+  return kb.g
+}
+
+func (kb*Kbapi) SetConfig (name string, enabled bool) error {
+  config := kb.g.Env.GetConfigWriter()
+  return config.SetBoolAtPath(name, enabled)
+}
+
 // Get Current Keybase Username.
 func (kb*Kbapi) GetUsername() string {
   return kb.g.Env.GetUsername().String()
