@@ -209,7 +209,7 @@ func (d *chatNotificationDisplay) NewChatActivity(ctx context.Context, arg chat1
   // send output to pipe
   jsonStr, err := json.Marshal(notif)
   if err != nil {
-    fmt.Printf("ERROR JSON MARSHAL\n")
+    //fmt.Printf("ERROR JSON MARSHAL\n")
     return err
   }
   d.output.Write(jsonStr)
@@ -225,7 +225,7 @@ func (d *chatNotificationDisplay) NewChatActivity(ctx context.Context, arg chat1
   }
   jsonStr, err := json.Marshal(notif)
   if err != nil {
-    fmt.Printf("ERROR JSON MARSHAL\n")
+    //fmt.Printf("ERROR JSON MARSHAL\n")
     return err
   }
   d.output.Write(jsonStr)
@@ -248,7 +248,7 @@ func (d *chatNotificationDisplay) ChatJoinedConversation(ctx context.Context, ar
  }
  jsonStr, err := json.Marshal(notif)
  if err != nil {
-   fmt.Printf("ERROR JSON MARSHAL\n")
+   //fmt.Printf("ERROR JSON MARSHAL\n")
    return err
  }
  d.output.Write(jsonStr)

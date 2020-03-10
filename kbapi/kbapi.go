@@ -92,9 +92,9 @@ func (kb*Kbapi) GetUsername() string {
   return kb.g.Env.GetUsername().String()
 }
 
-func (kb*Kbapi) StartChatApiListener( input io.Writer){
+func (kb*Kbapi) StartChatApiListener( input io.Writer) error {
   opts := ListenOptions{Wallet: false, Convs: true}
-  ChatApiListen(kb.g, opts, input)
+  return ChatApiListen(kb.g, opts, input)
 }
 
 func (kb*Kbapi) ReadListener(output io.Reader) (b []byte, err error) {
@@ -122,12 +122,12 @@ func (kb*Kbapi) SendChatApi(apiInput string) (b []byte, err error) {
       break
     } else if err != nil {
       if err == io.ErrUnexpectedEOF {
-        fmt.Printf("expected more JSON in input\n")
+        //fmt.Printf("expected more JSON in input\n")
         return nil, err
       }
       return nil, err
     }
-    fmt.Printf("Method: %s\n", call.Method)
+    //fmt.Printf("Method: %s\n", call.Method)
     switch call.Method {
     case methodList:
       var opts listOptionsV1
@@ -351,12 +351,12 @@ func (kb*Kbapi) SendTeamApi(apiInput string) (b []byte, err error){
       break
     } else if err != nil {
       if err == io.ErrUnexpectedEOF {
-        fmt.Printf("expected more JSON in input\n")
+        //fmt.Printf("expected more JSON in input\n")
         return nil, err
       }
       return nil, err
     }
-    fmt.Printf("Method: %s\n", call.Method)
+    //fmt.Printf("Method: %s\n", call.Method)
     if len(call.Params.Options) == 0 {
       if call.Method != "list-self-memberships" {
         return nil, ErrInvalidOptions{version: 1, method: call.Method, err: errors.New("empty options")}
@@ -409,12 +409,12 @@ func (kb*Kbapi) SendKvstoreApi(apiInput string) (b []byte, err error){
       break
     } else if err != nil {
       if err == io.ErrUnexpectedEOF {
-        fmt.Printf("expected more JSON in input\n")
+        //fmt.Printf("expected more JSON in input\n")
         return nil, err
       }
       return nil, err
     }
-    fmt.Printf("Method: %s\n", call.Method)
+    //fmt.Printf("Method: %s\n", call.Method)
     switch call.Method {
     case getEntryMethod:
       var opts getEntryOptions
